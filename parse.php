@@ -2,23 +2,34 @@
 ini_set('memory_limit', '2G');
 
 // Get the list of matches to parse
-$dir = "./files";
-$reportsDir = "./Reports/";
+$dir        = "./files";
+
+require_once 'class/dbHelper.php';
+
+$db = new dbHelper();
 
 
-define('DIVISIONS', 'Open,Limited,Limited 10,Carry Optics,Production,Single Stack,Revolver,PCC,Invalid');
+define('DIVISIONS', 'OPEN,LIMITED,LIMITED 10,CARRY OPTICS,PRODUCTION,SINGLE STACK,REVOLVER,PCC,Invalid');
 define('PF', 'MAJOR,MINOR,SUBMINOR,Invalid');
 define('CL', 'G,M,A,B,C,D,U');
 
 $matches = array();
-$handle = opendir($dir);
+$handle  = opendir($dir);
+
+echo "Getting list of matches/n";
+
 
 if ($handle) {
     while (($entry = readdir($handle)) !== FALSE) {
         $matches[] = $dir . "/" . $entry;
+            echo chr(27) . "[0G";  //Backs cursor to the beginning of the line
+            printf("%s", $entry );
     }
 }
 closedir($handle);
+echo "Done list of matches \n";
+printf("\n");
+
 
 // Remove . .. and .DS_Store
 $pos = array_search('./files/..', $matches);
@@ -28,112 +39,33 @@ unset($matches[$pos]);
 $pos = array_search('./files/.DS_Store', $matches);
 unset($matches[$pos]);
 
-$logFile = fopen($reportsDir . "log.csv", "w+");  // Truncates file
-$fields = array(
-    "Match",
-    "Comment",
-    'A',
-    'B',
-    'C'
-);
-fputcsv($logFile, $fields);
-
-// Create CSV files with headers.  Truncate if they exist
-$matchFile = fopen($reportsDir . "matches.csv", "w+");  // Truncates file
-$fields = array(
-    "ID",
-    "Match Date",
-    "Results URL",
-    "Create Date",
-    "Mod Date",
-    "Match Name",
-    "Club Name",
-    "Club Code",
-    "Match Type",
-    "Match Subtype",
-    "Match Level",
-    "Device Arch",
-    "Device Model",
-    "App Version",
-    "OS Version",
-    "Num Shooters",
-    "Num Stages",
-    // "Num Match Notes",
-    // "Match Notes",
-);
-fputcsv($matchFile, $fields);
-
-$dqFile = fopen( $reportsDir . "dq.csv", "w+");  // Truncates file
-$fields = array(
-    "ID",
-    "Match Date",
-    "Results URL",
-    "Create Date",
-    "Mod Date",
-    "Match Name",
-    "Club Name",
-    "Club Code",
-    "Match Type",
-    "Match Subtype",
-    "Match Level",
-    "DQ Rule",
-    "DQ Description",
-    "DQ Count",
-);
-fputcsv($dqFile, $fields);
-
-$shooterFile = fopen($reportsDir . "division.csv", "w+");  // Truncates file
-$fields = array(
-    "ID",
-    "Match Date",
-    "Results URL",
-    "Create Date",
-    "Mod Date",
-    "Match Name",
-    "Club Name",
-    "Club Code",
-    "Match Type",
-    "Match Subtype",
-    "Match Level",
-    "Division",
-    "PF",
-    "Class",
-    "Count",
-);
-
-fputcsv($shooterFile, $fields);
-
 $numMatches = sizeof($matches);
-echo "Parsing $numMatches Match Data\n";
 
-$matchID = 0; // Match ID
-$dqID = 0; // 
-$shooterID = 0; // 
+$loopCNT   = 0; // How   many times we've gone throigh the loop.  Used for %complete
 
 foreach ($matches as $match) {
     $matchData = getMatchData($match);
-    // Skip any NULL results or "My First Match"
-    if (
-        $matchData == NULL ||
-        (getData('match_name', $matchData) == 'My First Match') ||
-        (getData('match_name', $matchData) == 'My First Match')
-        || (getData('match_name', $matchData) == 'Test Post')
-    ) {
-        continue;
-    }
 
     // Recreate the match results URL
     // $match is in the form  files/guid/ - I need the guid
-    $segments = explode('/', $match);
-    $guid = $segments[2];
+    $segments  = explode('/', $match);
+    $matchGUID = $segments[2];
 
-    $matchURL = 'https://practiscore.com/results/new/' . $guid;
     // Display % complete
-    $percentComplete = ($matchID / $numMatches) * 100;
-
+    $percentComplete = ($loopCNT++ / $numMatches) * 100;
 
     echo chr(27) . "[0G";  //Backs cursor to the beginning of the line
-    printf("%06.3f %% complete - %s", $percentComplete, $matchURL);
+    printf("%06.3f %% complete - %s - %u of %u", $percentComplete, $matchGUID, $loopCNT, $numMatches);
+
+    // Skip any NULL results or "My First Match" or other matches in the list of bad matches
+    if (
+        $matchData == NULL ||
+        (getData('match_name', $matchData) == 'My First Match') ||
+        (getData('match_name', $matchData) == 'My First Match') ||
+        (getData('match_name', $matchData) == 'Test Post')
+    ) {
+        continue;
+    }
 
     // Get ] information for USPSA matches.  This filters out a lot of the noise but there are still non-USPSA matches that slip through
     if (
@@ -157,15 +89,19 @@ foreach ($matches as $match) {
                 case 'Carry Optics':
                 case 'CARRY OPTICS':
                 case 'CO':
+                case 'LIMITED':
                 case 'Limited':
                 case 'LTD':
                 case 'Limited 10':
                 case 'Limited-10':
                 case 'LTDTEN':
                 case 'Production':
+                case 'PRODUCTION':
                 case 'PROD':
                 case 'SS':
+                case 'SINGLE STACK':
                 case 'Single Stack':
+                case 'REVOLVER':
                 case 'Revolver':
                 case 'REV':
                 case 'Pistol Caliber Carbine':
@@ -174,7 +110,16 @@ foreach ($matches as $match) {
                     break;
 
                 default:
-                    $valid = FALSE;
+                    $data = array(
+                        'match_guid' => $matchGUID,
+                        'Comment' => 'Invalid',
+                        'A' => 'Match Division',
+                        'B' => $division,
+                        'C' => '',
+                    );
+                    dbUpsert('log', $data);
+
+                    $valid = FALSE;  // Invalid division in shooter record            
             }
         }
         if (!$valid) {
@@ -192,81 +137,75 @@ foreach ($matches as $match) {
             }
         }
 
-        //
-        // Data quaility is poor so make the data better.
-        //
-
         // 
-        // Normailze Division Names
+        // Normailze Division/PF/Class Names for each shooter record
         //
-
         foreach ($matchData['match_shooters'] as $shooter) {
-            switch ($division = getData('sh_dvp', $shooter)) {
-                case 'Open':
+
+            // Division
+            switch ($division = strtoupper(getData('sh_dvp', $shooter))) {
                 case 'OPEN':
-                    $division = 'Open';
+                    $division = 'OPEN';
                     break;
 
-                case 'Carry Optic':
-                case 'carry optics':
                 case 'CARRY OPTICS':
                 case 'CO':
-                    $division = 'Carry Optics';
+                    $division = 'CARRY OPTICS';
                     break;
 
-                case 'Limited':
+                case 'LIMITED':
                 case 'LTD':
-                    $division = 'Limited';
+                    $division = 'LIMITED';
                     break;
 
-                case 'Limited 10':
-                case 'Limited-10':
+                case 'LIMITED 10':
+                case 'LIMITED-10':
                 case 'LTDTEN':
-                    $division = 'Limited 10';
+                    $division = 'LIMITED 10';
                     break;
 
                 case 'PRODUCTION':
-                case 'Production':
                 case 'PROD':
-                    $division = 'Production';
+                    $division = 'PRODUCTION';
                     break;
 
                 case 'SS':
-                case 'Single Stack':
-                case 'SingleStack':
-                    $division = 'Single Stack';
+                case 'SINGLE STACK':
+                case 'SINGLESTACK':
+                    $division = 'SINGLE STACK';
                     break;
 
-                case 'Revolver':
-                case 'revolver':
+                case 'REVOLVER':
                 case 'REV':
-                    $division = 'Revolver';
+                    $division = 'REVOLVER';
                     break;
 
-                case 'Pistol Caliber Carbine':
+                case 'PISTOL CALIBER CARBINE':
                 case 'PCC':
-                case 'Pcc':
                 case 'PCCO':
                     $division = 'PCC';
                     break;
 
                 default:
-                    $fields = array(
-                        $matchURL,
-                        'Invalid', 'Division', $division,
+                    $data = array(
+                        'match_guid' => $matchGUID,
+                        'Comment' => 'Invalid',
+                        'A' => 'Shooter Division',
+                        'B' => $division,
+                        'C' => '',
                     );
-                    fputcsv($logFile, $fields);
+                    dbUpsert('log', $data);
                     $valid = FALSE;  // Invalid division in shooter record
             }
             if (!$valid) {
                 break;
             }
-            //
-            // Deal with class inconsistencies
-            //
-            switch ($class = getData('sh_grd', $shooter)) {
+
+            // Classification
+            switch ($class = strtoupper(getData('sh_grd', $shooter))) {
                 case 'GM':
                 case 'G':
+                case 'GRAND MASTER':
                     $class = 'G';
                     break;
 
@@ -279,18 +218,26 @@ foreach ($matches as $match) {
 
                 case 'U':
                 case 'X':
-                case 'Unclassified':
+                case 'UNCLASSIFIED':
                 case '':
                     $class = 'U';
                     break;
 
                 default:
+                    // FIX a common error where classification is something else
+                    $data = array(
+                        'match_guid' => $matchGUID,
+                        'Comment' => 'Fix',
+                        'A' => 'Class',
+                        'B' => $class,
+                        'C' => '',
+                    );
+                    dbUpsert('log', $data);
                     $class = 'U';
             }
-            //
-            // Fix PF data
-            //
-            switch ($pf = getData('sh_pf', $shooter)) {
+
+            // Power Factor
+            switch ($pf = strtoupper(getData('sh_pf', $shooter))) {
                 case 'MAJOR':
                 case 'MINOR':
                 case 'SUBMINOR':
@@ -298,35 +245,48 @@ foreach ($matches as $match) {
 
                 default:
                     $valid = FALSE;
-
-                    $fields = array(
-                        $matchURL,
-                        'Invalid', 'PF', $pf,
+                    $data = array(
+                        'match_guid' => $matchGUID,
+                        'Comment' => 'Invalid',
+                        'A' => 'PF',
+                        'B' => $pf,
+                        'C' => '',
                     );
-                    fputcsv($logFile, $fields);
-                    $pf = 'Invalid';
+                    dbUpsert('log', $data);
             }
             if (!$valid) {
                 break;
             }
 
-            // Check to see if Div/PF makes sense
-            if (
-                $pf == 'MAJOR' && ($division == 'PCC' ||
-                    $division == 'Production' ||
-                    $division == 'Carry Optics')
-            ) {
-                $fields = array(
-                    $matchURL,
-                    'Fix', 'Division/PF', $division, $pf,
+            // FIX:  Some Divisions are MINOR only.  This is a common error in match registration
+            //
+            if ($pf == 'MAJOR' && ($division == 'PCC' || $division == 'Production' ||   $division == 'Carry Optics')) {
+                $data = array(
+                    'match_guid' => $matchGUID,
+                    'Comment' => 'Fix',
+                    'A' => 'Division/PF',
+                    'B' => $division,
+                    'C' => $pf,
                 );
-                fputcsv($logFile, $fields);
+                dbUpsert('log', $data);
                 $pf = 'MINOR';
             }
-            if (!$valid) {
-                break;
-            }
+            // This should all now make sense so count it
             $divisionPfClass[$division][$pf][$class]++;
+
+            // And save it
+            $data = array(
+                'match_guid' => $matchGUID,
+                'sh_grd' => strtoupper(getData('sh_grd', $shooter)),
+                'sh_ln' => strtoupper(getData('sh_ln', $shooter)),
+                'sh_fn' => strtoupper(getData('sh_fn', $shooter)),
+                'sh_dvp' => strtoupper(getData('sh_dvp', $shooter)),
+                'sh_pf' => strtoupper(getData('sh_pf', $shooter)),
+                'sh_id' => strtoupper(getData('sh_id', $shooter)),
+                'sh_dq' => strtoupper(getData('sh_dq', $shooter)),
+                'sh_dqrule' => strtoupper(getData('sh_dqrule', $shooter)),
+            );
+            dbUpsert('shooter', $data);
         }
 
         // Looks to be a valid match
@@ -338,25 +298,15 @@ foreach ($matches as $match) {
                 foreach (explode(',', PF) as $pf) {
                     foreach (explode(',', CL) as $class) {
                         if ($divisionPfClass[$div][$pf][$class] != 0) {
-                            $fields = array(
-                                $shooterID++,
-                                getData('match_date', $matchData),
-                                $matchURL,
-                                getData('match_creationdate', $matchData),
-                                getData('match_modifieddate', $matchData),
-                                getData('match_name', $matchData),
-                                getData('match_clubname', $matchData),
-                                getData('match_clubcode', $matchData),
-                                getData('match_type', $matchData),
-                                getData('match_subtype', $matchData),
-                                getData('match_level', $matchData),
-                                $div,
-                                $pf,
-                                $class,
-                            );
-                            array_push($fields, $divisionPfClass[$div][$pf][$class]);
 
-                            fputcsv($shooterFile, $fields);
+                            $data = array(
+                                'match_guid' => $matchGUID,
+                                'Division' => $division,
+                                'PF' => $pf,
+                                'Class' => $division,
+                                'Count' => $divisionPfClass[$div][$pf][$class],
+                            );
+                            dbUpsert('division', $data);
                         }
                     }
                 }
@@ -367,85 +317,73 @@ foreach ($matches as $match) {
             // If there is information at the stage score level it will be a DQ code that we need to translate to the actual DQ rule and reason..
             //
 
-            $dqArray = [];
 
-            $scoreData = getScoreData($match);
-            if (!array_key_exists('match_dqs', $matchData)) {
-                continue;
-            }
-            $match_dqs = $matchData["match_dqs"];
+            if (array_key_exists('match_dqs', $matchData)) {
+                $match_dqs = $matchData["match_dqs"];
+                $dqArray = [];  // One row per DQ
 
-            foreach ($scoreData['match_scores'] as $stage) {
-                foreach ($stage['stage_stagescores'] as $score) {
-                    if (array_key_exists('dqs', $score) && $score['dqs'] != "") {
-                        // Found a DQ
-                        $dq_key      = array_search($score['dqs'][0], array_column($match_dqs, 'uuid'));
-                        // // Translate the DQ code to Rule and Description
-                        array_push($dqArray, $match_dqs[$dq_key]['name']);
+                $scoreData = getScoreData($match);
+
+                // Walk through the stage scores looking for a DQ
+                // TODO:  Only record the oldest (i.e. first recorded) DQ for a shooter
+                foreach ($scoreData['match_scores'] as $stage) {
+                    foreach ($stage['stage_stagescores'] as $score) {
+                        if (array_key_exists('dqs', $score) && $score['dqs'] != "") {
+                            // Found a DQ
+                            // Translate the DQ code to Rule and Description
+                            $dq_key      = array_search($score['dqs'][0], array_column($match_dqs, 'uuid'));
+                            array_push($dqArray, $match_dqs[$dq_key]['name']);
+                        }
                     }
+                }
+
+                $dqTypeCount = array_count_values($dqArray);  // Count # of DQ's per type
+                arsort($dqTypeCount); // TODO Why am I sorting??
+                foreach ($dqTypeCount as $dq => $count) {
+                    $strArray = explode(' ', $dq, 2);  // DQ Record is RULE SPACE DESCRIPTION.  Split on space
+
+                    $data = array(
+                        'match_guid' => $matchGUID,
+                        'rule' => $strArray[0],
+                        'description' =>  $strArray[1],
+                        'count' => $count,
+                    );
+                    dbUpsert('dq', $data);
                 }
             }
 
-            $dqTypeCount = array_count_values($dqArray);
-            arsort($dqTypeCount);
-            foreach ($dqTypeCount as $dq => $count) {
-                $strArray = explode(' ', $dq, 2);
-                // Print it all out
-                $fields = array(
-                    $dqID++,
-                    getData('match_date', $matchData),
-                    $matchURL,
-                    getData('match_creationdate', $matchData),
-                    getData('match_modifieddate', $matchData),
-                    getData('match_name', $matchData),
-                    getData('match_clubname', $matchData),
-                    getData('match_clubcode', $matchData),
-                    getData('match_type', $matchData),
-                    getData('match_subtype', $matchData),
-                    getData('match_level', $matchData),
-
-                    $strArray[0],
-                    $strArray[1],
-                    $count,
-                );
-                fputcsv($dqFile, $fields);
-            }
-
+            // TODO
+            // 
+            // Fix obviuosly incorrect timestamps
 
             // 
             // Print out basic match information
             //
-            $fields = array(
-                $matchID,
-                getData('match_date', $matchData),
-                $matchURL,
-                getData('match_creationdate', $matchData),
-                getData('match_modifieddate', $matchData),
-                getData('match_name', $matchData),
-                getData('match_clubname', $matchData),
-                getData('match_clubcode', $matchData),
-                getData('match_type', $matchData),
-                getData('match_subtype', $matchData),
-                getData('match_level', $matchData),
 
-                getData('device_arch', $matchData),
-                getData('device_model', $matchData),
-                getData('app_version', $matchData),
-                getData('os_version', $matchData),
-
-                countData('match_shooters', $matchData),
-                countData('match_stages', $matchData),
+            $data = array(
+                'match_guid'                        =>  $matchGUID,
+                'date'                        =>  getData('match_date',         $matchData),
+                'ctime'                       =>  getData('match_creationdate', $matchData),
+                'mtime'                       => getData('match_modifieddate', $matchData),
+                'name'                        => getData('match_name',         $matchData),
+                'club'                        =>   getData('match_clubname',     $matchData),
+                'club_code'                   =>  getData('match_clubcode',     $matchData),
+                'match_type'                  =>  getData('match_subtype',      $matchData),
+                'match_subtype'               =>  getData('match_subtype',      $matchData),
+                'match_level'                 =>  getData('match_level',        $matchData),
+                'device_arch'                 => getData('device_arch',        $matchData),
+                'device_model'                =>  getData('device_model',       $matchData),
+                'app_version'                 =>  getData('app_version',        $matchData),
+                'os_version'                  =>   getData('os_version',         $matchData),
+                'count_shooters'              =>   countData('match_shooters',   $matchData),
+                'count_stages'                =>  countData('match_stages', $matchData),
             );
-            fputcsv($matchFile, $fields);
+            dbUpsert('matches', $data,);
         }
     }
-    $matchID++;
 }
-
-fclose($matchFile);
-fclose($dqFile);
-
 echo "\nDone\n";
+
 
 // Get the match data
 function getMatchData($match)
@@ -487,4 +425,27 @@ function countData($key, $array)
     } else {
         return 0;
     }
+}
+
+function dbUpsert($table, $data, $match = NULL)
+{
+    global $db;
+
+    $rows = $db->select($table, array('match_guid' => $data['match_guid']));
+    if ($rows['status'] == 'success') {
+        if (is_null($match)) {
+            $match = $data;
+        }
+        $rows = $db->update($table, $data, $match, array('match_guid'));
+    } else {
+        $rows = $db->insert($table, $data, array('match_guid'));
+    }
+}
+
+
+function dbInsert($table, $data)
+{
+    global $db;
+
+    $rows = $db->insert($table, $data, array('match_guid'));
 }

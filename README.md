@@ -21,7 +21,6 @@ Reports
 
 Todo
 ----
-* The data is large and is better suited to being added to a database
 * Change parse.php to only parse new records vs all records
 * Ignore known bad matches
 * Fix dates that are obviously incorrect
